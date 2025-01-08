@@ -1,0 +1,471 @@
+---
+title: "Heatmaps - conserved genes (master file 4)"
+author: "Ellen Dimmen Chapple"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    number_sections: true
+    toc_float: true
+    theme: lumen
+editor_options:
+  chunk_output_type: console
+---
+
+```{r libraries, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(ComplexHeatmap)
+library(gplots)
+library(cowplot)
+library(circlize)
+library(gdata)
+
+```
+
+
+# Conserved genes (and differentiated genes before filtering for conserved genes)
+
+
+```{r}
+
+
+species_list <- c("Cher", "Asp", "Birch", "Nor", "Scots", "Lodge") 
+file_list_2 <- c()
+for (i in species_list){
+  
+  expr_name <- paste0("Data/DATA/transcriptomicsData/",i,"Wood_transcriptomics.txt.gz")
+  file_list_2 <- append(file_list_2, expr_name, after = length(file_list_2))
+  
+}
+
+
+load("Data/DATA/conserved_genes_PVAL_0.1.RData") 
+
+load("Data/DATA/conserved_genes_wide.RData")
+
+
+conserved_genes <- genes %>%
+  ungroup()
+
+s1 <- conserved_genes %>%
+  select(OrthoGroup, GeneSpecies1 ,Species1, UGeneSpecies1, cliqueID) %>%
+  rename("UGenes" = UGeneSpecies1, "Genes" = GeneSpecies1 ,"Species" = Species1)
+
+s2 <- conserved_genes %>%
+  select(OrthoGroup, GeneSpecies2,Species2, UGeneSpecies2, cliqueID) %>%
+  rename("UGenes" = UGeneSpecies2, "Genes" = GeneSpecies2,"Species" = Species2)
+
+gene_set_combined <- rbind(s1,s2)
+gene_set_combined <- gene_set_combined %>% 
+  group_by(cliqueID) %>% 
+  distinct(UGenes, .keep_all = T)
+
+# Keep multiple cliques per OG if they contain completely unique genes
+
+caas_wider_unique_cliques <- caas_wider %>% 
+  group_by(OrthoGroup) %>% 
+  distinct(Asp,  .keep_all = T) %>% 
+  distinct(Birch, .keep_all = T) %>% 
+  distinct(Cher, .keep_all = T) %>% 
+  distinct(Nor, .keep_all = T) %>% 
+  distinct(Scots, .keep_all = T) %>% 
+  distinct(Lodge, .keep_all = T) 
+
+gene_set <- gene_set_combined %>%
+  filter(cliqueID %in% caas_wider_unique_cliques$cliqueID)
+
+
+length(unique(gene_set$OrthoGroup)) # 2235
+length(unique(gene_set$cliqueID)) # 2436
+
+# NB! Remove all uneccessary files - need only gene_set
+rm(conserved_genes)
+rm(gene_set_combined)
+
+```
+
+# Differentiated genes
+
+
+```{r}
+
+
+species_list <- c("Cher", "Asp", "Birch", "Nor", "Scots", "Lodge") 
+file_list_2 <- c()
+for (i in species_list){
+  
+  expr_name <- paste0("Data/DATA/transcriptomicsData/",i,"Wood_transcriptomics.txt.gz")
+  file_list_2 <- append(file_list_2, expr_name, after = length(file_list_2))
+  
+}
+
+
+load("Data/DATA/differentiated_genes_PVAL_0.1_filtered.RData") 
+
+s1 <- differentiated_genes %>% 
+  select(OrthoGroup, cliqueID, Species1, GeneSpecies1, UGeneSpecies1) %>% 
+  rename("UGenes" = UGeneSpecies1, "Genes" = GeneSpecies1 ,"Species" = Species1)
+
+s2 <- differentiated_genes %>% 
+  select(OrthoGroup, cliqueID, Species2, GeneSpecies2, UGeneSpecies2) %>% 
+  rename("UGenes" = UGeneSpecies2, "Genes" = GeneSpecies2,"Species" = Species2) 
+
+combined_diff <- rbind(s1, s2)
+gene_set <- combined_diff %>% 
+  group_by(cliqueID) %>% 
+  distinct(UGenes, .keep_all = T) %>% 
+  ungroup()
+
+  
+
+length(unique(gene_set$OrthoGroup))
+length(unique(gene_set$cliqueID))
+
+```
+
+## Expression heatmap (one for all 6 species)
+
+**Basic heatmap**
+
+```{r}
+
+# ------- HM params --------
+
+height <- unit(20, "cm") 
+show_rownames <- F
+show_colnames <- F
+row_clust <- T
+
+col_function_1 <- colorRamp2(c(-3, 0 ,3), c("#0571b0", "#f7f7f7","#ca0020" ))
+species_lat_name <- c("P. tremula", "B. pendula","P. avium" , "P. abies", "P. sylvestris", "P. contorta")
+
+
+# Template for aligning filtered expression data sets
+combined_expression_data <- gene_set %>% 
+  select(OrthoGroup, cliqueID) %>% 
+  group_by(cliqueID) %>% 
+  slice(1) %>%
+  ungroup()
+
+# For each species: expression df with only conserved genes for one specimen are scaled before being added to template.
+for (i in 1:length(file_list_2)){
+  
+  # i <- 1
+
+  x <- read_delim(file_list_2[i], show_col_types = FALSE) %>% 
+    select(Genes, contains("1."))
+  
+  species <- sapply(strsplit(file_list_2[i], "transcriptomicsData/"), "[",2)
+  species <- sapply(strsplit(species, "Wood"), "[", 1)  
+  
+  conserved_genes_one_species <- gene_set[,-c(5)] %>% 
+    filter(Species == species)
+
+  expr <- x %>% 
+    filter(Genes %in% conserved_genes_one_species$Genes)
+
+    print(paste0(species, ": ", nrow(expr), " genes."))
+
+  scaled_data <- t(scale(t(expr[,-1]), center = T, scale = T))
+  scaled_data[is.nan(scaled_data)] <-0 # Lodge had a few rows with NaNs.
+  
+  
+  scaled_data_with_genes <- cbind(Genes = expr$Genes, scaled_data)
+  aligning_genes <- gene_set%>%
+    filter( species == Species) %>% 
+    left_join(as.data.frame(scaled_data_with_genes), by = "Genes") %>%
+    na.omit() 
+
+  
+  combined_expression_data <- combined_expression_data %>% 
+    left_join(aligning_genes[,-c(1:4)], by = "cliqueID")
+  
+}
+
+
+combined_expression_matrix <- combined_expression_data %>% 
+  ungroup() %>% 
+  column_to_rownames("cliqueID") %>% 
+  select(-c(1)) %>% 
+  select(c(contains("A"), contains("B"), contains("C"), contains("N"), contains("S"), contains("L")))%>%
+  mutate_if(is.character, as.numeric) %>% 
+  as.matrix()
+
+column_split <- rep("A", 163)
+column_split[26:53] <- "B"
+column_split[54:80] <- "C"
+column_split[81:107] <- "N"
+column_split[108:135] <- "S"
+column_split[136:163] <- "L"
+
+column_split <- factor(column_split, levels = c("A", "B", "C", "N", "S", "L"))
+
+# ------ Clustering genes ------
+
+rdist <- as.dist(1-cor(t(combined_expression_matrix), method="pearson"))
+# rdist <- dist(combined_expression_matrix, method = "euclidean")
+
+rhc <- hclust(rdist,method="ward.D2")
+rdendro <- as.dendrogram(rhc)
+
+rnclust = 7
+rct <- cutree(rhc, k=rnclust)
+rct <- sort(rct)
+row_order <- names(rct)
+
+# Change row order 
+combined_expression_matrix <- combined_expression_matrix[row_order,]
+
+ht_opt$TITLE_PADDING = unit(c(30, 10), "points")
+ht_opt$message = FALSE
+
+Heatmap(combined_expression_matrix,
+        show_column_names = show_colnames,
+        cluster_rows = F,
+        show_row_dend = F,
+        row_dend_width =  unit(30, "mm"),
+        column_title =   species_lat_name,
+        column_title_side = "bottom",
+        show_column_dend = FALSE,
+        column_title_gp = gpar(fontsize = 20, fontface = "italic"  ,fill = "white", border = "white" ),
+        show_row_names = show_rownames,
+        heatmap_width = unit(45, "cm"),
+        heatmap_height = height,
+        column_order = 1:ncol(combined_expression_matrix),
+        show_heatmap_legend = F,
+        col = col_function_1,
+        column_split = column_split,
+        column_gap = unit(3, "mm"))
+
+
+# save fig: 2000 x 900
+
+
+```
+
+
+**Module enrichment**
+
+```{r}
+
+nameless <- rct
+names(nameless) <- NULL
+expressed_genes <- read_delim("Data/DATA/transcriptomicsData/AspWood_transcriptomics.txt.gz")
+
+load("Data/DATA/go_list.RData")
+go_data_frame <- data.frame(go_id=go_list$`GO ID`, evidence=rep("ND", nrow(go_list)), 
+                            gene_id=go_list$`Sequence Name`)
+
+library(GSEABase)
+library(GOstats)
+library(gdata)
+
+
+go_frame_object = GOFrame(go_data_frame,organism="Aspen")
+go_all_frame_object = GOAllFrame(go_frame_object)
+
+
+gene_set_collection <- GeneSetCollection(go_all_frame_object, setType = GOCollection())
+universe <- expressed_genes$Genes
+group_name <- "conserved_genes"
+pval_cutoff <- 0.05
+
+start <- 0
+end <- 0
+combined_summary <- c()
+
+for(i in 1:7){
+  print(i)
+  
+  # i <- 1
+  
+  if(i == 1){
+    
+    cluster_i <- nameless[nameless == i]
+    nrow <- length(cluster_i)
+    cat("Cluster length: ", nrow)
+    cat("\n")
+    
+    start <- 1
+    end <- nrow
+    
+    rows <- combined_expression_data[start:end, 2]   
+    genes <- caas_wider %>% 
+      dplyr::filter(cliqueID %in% rows$cliqueID) %>% 
+      dplyr::select(Asp)
+    
+    cat("Row numbers: ", nrow(rows))
+    cat("\n")
+    
+    gene_ID <- genes$Asp
+    
+    params <- GSEAGOHyperGParams(name="GSEA",
+                                 geneSetCollection = gene_set_collection,
+                                 geneIds = gene_ID,
+                                 universeGeneIds = universe, 
+                                 ontology = "BP",
+                                 pvalueCutoff = pval_cutoff,
+                                 conditional = FALSE,
+                                 testDirection = "over")
+    
+    hyper_g_test <- hyperGTest(params)
+    
+    summary_table <- summary(hyper_g_test)
+    summary_table <- summary_table %>% 
+      mutate(cluster = i)
+    
+    combined_summary <- rbind(combined_summary, summary_table)
+    
+  } else{  
+    # i <- 2
+    cluster_i <- nameless[nameless == i]
+    nrow <- length(cluster_i)
+    cat("Cluster length: ", nrow)
+    cat("\n")
+    
+    start <- end + 1
+    end <- end + nrow 
+    
+    
+    rows <- combined_expression_data[start:end, 2]   
+    genes <- caas_wider %>% 
+      dplyr::filter(cliqueID %in% rows$cliqueID) %>% 
+      dplyr::select(Asp)
+    cat("Row numbers: ", nrow(rows))
+    cat("\n")
+    
+    gene_ID <- genes$Asp
+    
+    params <- GSEAGOHyperGParams(name="GSEA",
+                                 geneSetCollection = gene_set_collection,
+                                 geneIds = gene_ID,
+                                 universeGeneIds = universe, 
+                                 ontology = "BP",
+                                 pvalueCutoff = pval_cutoff,
+                                 conditional = FALSE,
+                                 testDirection = "over")
+    
+    hyper_g_test <- hyperGTest(params)
+    
+    summary_table <- summary(hyper_g_test)
+    summary_table <- summary_table %>% 
+      mutate(cluster = i)
+    
+    combined_summary <- rbind(combined_summary, summary_table)}
+  
+  
+}
+
+
+combined_summary <- combined_summary[combined_summary$Count>1,]
+combined_summary <- combined_summary[,-c(3,4)]
+colnames(combined_summary) <- c("GO id","P-value","x","n","GO term", "Cluster")
+
+rownames(combined_summary) <- 1:nrow(combined_summary)
+
+combined_summary$`P-value`<- format(combined_summary$`P-value`, digits=3, scientific=TRUE)
+
+
+
+
+# Save all GO terms
+go_modules <- combined_summary %>% 
+  dplyr::group_by(`GO id`) %>% 
+  dplyr::mutate(rep = n()) %>% 
+  dplyr::ungroup()
+
+save(go_modules, file = "Data/DATA/go_summary_modules.RData")
+
+
+```
+
+
+
+**Add annotation bars to heatmap using modules**
+
+```{r}
+
+# ------ Sample annotation ----------
+
+df_species_name_and_sections <- data.frame(
+  short = c(rep("Asp",25),rep("Birch", 28), rep("Cher", 27),rep("Nor", 27),  rep("Scots", 28), rep("Lodge", 28)),
+  cluster = c(rep("1",3), rep("2", 6),rep("3", 9), rep("4",7), #A - 25
+              rep("1",5), rep("2", 4),rep("3", 14), rep("4",5),#B - 28  
+              rep("1",5), rep("2", 4),rep("3", 9), rep("4",9), #C - 27
+              rep("1",9), rep("2", 4),rep("3", 5), rep("4",9), #N - 27
+              rep("1",7), rep("2", 7),rep("3", 8), rep("4",6), #S - 28
+              rep("1",4), rep("2", 5),rep("3", 13), rep("4",6) #L - 28
+              ))
+
+sample_species_x <- df_species_name_and_sections$cluster
+
+ha = HeatmapAnnotation(
+  Samples = sample_species_x,
+  col = list(Samples = c( "1"="#A3CC51","2"="#51A3CC","3"="#CC5151","4"="#B26F2C")),
+  simple_anno_size = unit(0.8, "cm"),
+  show_legend = F,
+  show_annotation_name = F
+)
+
+
+# ------ Gene annotation ----------
+
+# C1 <- 300
+# C2 <- 478
+# C3 <- 612
+# C4 <- 105
+# C5 <- 352
+# C6 <- 403
+# C7 <- 186
+
+row_split <- rep("1", 2436)
+row_split[301:778] <- "2"
+row_split[779:1390] <- "3"
+row_split[1391:1495] <- "4"
+row_split[1496:1847]<- "5"
+row_split[1848:2250]<- "6"
+row_split[2251:2436]<- "7"
+
+
+
+# ------ Heatmap with annotations ----------
+Heatmap(combined_expression_matrix,
+        show_column_names = show_colnames,
+        cluster_rows = F,
+        show_row_dend = F,
+        row_dend_width =  unit(30, "mm"),
+        column_title =   species_lat_name,
+        column_title_side = "bottom",
+        show_column_dend = FALSE,
+        column_title_gp = gpar(fontsize = 20, fontface = "italic"  ,fill = "white", border = "white" ),
+        show_row_names = show_rownames,
+        heatmap_width = unit(45, "cm"),
+        heatmap_height = height,
+        column_order = 1:ncol(combined_expression_matrix),
+        top_annotation = ha,
+        left_annotation = rowAnnotation(
+          Samples = rct,
+          col = list(Samples = c("1" = "#B26F2C", "4" = "#A3CC51", "3" = "#51A3CC", "7" ="lightsteelblue3", "5" = "orange", "6" = "#cc5151", "2" = "darkred")),
+      # c("1" = "#B26F2C", "4" = "lightsteelblue3", "3" = "#51A3CC", "7" ="mediumpurple3", "5" = "#CC5151", "6" = "orange", "2" = "darkred")
+          simple_anno_size = unit(0.8, "cm"),
+          show_legend = F,
+          show_annotation_name = F
+        ),
+        show_heatmap_legend = F,
+        col = col_function_1,
+        column_split = column_split,
+        column_gap = unit(3, "mm"),
+        row_split = row_split,
+        row_gap = unit(0, "mm"),
+        row_title_rot = 0)
+
+
+# save fig: 2000 x 900
+
+```
+
+
+
+
